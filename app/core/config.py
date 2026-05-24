@@ -8,6 +8,15 @@ class Settings(BaseSettings):
     app_env: str = "development"
     app_debug: bool = True
     api_v1_prefix: str = "/api/v1"
+    cors_allow_origins: str = (
+        "http://localhost:4200,"
+        "http://127.0.0.1:4200,"
+        "http://localhost,"
+        "http://127.0.0.1,"
+        "https://localhost,"
+        "capacitor://localhost,"
+        "ionic://localhost"
+    )
 
     database_url: str
 

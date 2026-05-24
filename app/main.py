@@ -7,6 +7,12 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
+allowed_origins = [
+    origin.strip()
+    for origin in settings.cors_allow_origins.split(",")
+    if origin.strip()
+]
+
 app = FastAPI(
     title=settings.app_name,
     debug=settings.app_debug,
@@ -15,11 +21,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:4200",
-        "http://127.0.0.1:4200",
-    ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^(http://localhost|https://localhost|capacitor://localhost|ionic://localhost|http://127\.0\.0\.1:\d+|http://localhost:\d+)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
