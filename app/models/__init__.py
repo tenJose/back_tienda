@@ -9,6 +9,7 @@ from app.models.catalogs import (
 )
 from app.models.inventory import HistorialPrecios, Inventario, MovimientoInventario
 from app.models.products import Producto
+from app.models.users import Usuario
 
 __all__ = [
     "Categoria",
@@ -22,4 +23,5 @@ __all__ = [
     "Inventario",
     "MovimientoInventario",
     "Producto",
+    "Usuario",
 ]

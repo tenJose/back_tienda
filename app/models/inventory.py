@@ -12,7 +12,7 @@ from app.core.database import Base
 class Inventario(Base):
     __tablename__ = "inventarios"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     producto_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("productos.id"), nullable=False)
     sucursal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sucursales.id"))
     existencia: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=0)
@@ -23,7 +23,7 @@ class Inventario(Base):
 class MovimientoInventario(Base):
     __tablename__ = "movimientos_inventario"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     producto_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("productos.id"), nullable=False)
     sucursal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sucursales.id"))
     tipo_movimiento: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -40,7 +40,7 @@ class MovimientoInventario(Base):
 class HistorialPrecios(Base):
     __tablename__ = "historial_precios"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     producto_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("productos.id"), nullable=False)
     precio_anterior: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     precio_nuevo: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))

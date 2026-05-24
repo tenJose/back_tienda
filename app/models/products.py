@@ -12,7 +12,7 @@ from app.core.database import Base
 class Producto(Base):
     __tablename__ = "productos"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     codigo_interno: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     codigo_barras: Mapped[str | None] = mapped_column(String(100), unique=True)

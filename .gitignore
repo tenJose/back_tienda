@@ -5,3 +5,4 @@ app/__pycache__/__init__.cpython-314.pyc
 /app/api/__pycache__
 /app/api/v1/__pycache__
 /app/services/__pycache__
+migrations/20260524_sync_supabase.sql
