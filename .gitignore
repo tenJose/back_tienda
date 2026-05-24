@@ -1,8 +1,28 @@
+# Virtual env
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Pytest
+.pytest_cache/
+
+# MyPy
+.mypy_cache/
+
+# Ruff
+.ruff_cache/
+
+# Env vars
 .env
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
 .env.example
-app/__pycache__/__init__.cpython-314.pyc
-/app/__pycache__
-/app/api/__pycache__
-/app/api/v1/__pycache__
-/app/services/__pycache__
 migrations/20260524_sync_supabase.sql
