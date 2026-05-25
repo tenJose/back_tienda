@@ -21,8 +21,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_origin_regex=r"^(http://localhost|https://localhost|capacitor://localhost|ionic://localhost|http://127\.0\.0\.1:\d+|http://localhost:\d+)$",
+    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://localhost", "http://127.0.0.1"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,7 +32,9 @@ app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    _ = request, exc
+    _ = request
+    import traceback
+    traceback.print_exc()
     return JSONResponse(status_code=500, content={"detail": "Error interno del servidor"})
 
 

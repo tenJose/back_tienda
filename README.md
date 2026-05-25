@@ -48,6 +48,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Nota: `EmailStr` en Pydantic requiere `email-validator`, y ya queda incluido en `requirements.txt`.
+
 ## 4) Crear esquema SQL en Supabase
 
 Ejecuta [sql/schema.sql](sql/schema.sql) en el SQL Editor de Supabase.

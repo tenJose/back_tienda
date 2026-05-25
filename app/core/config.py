@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     require_auth_token: bool = True
     allow_role_header_fallback: bool = True
 
+    gemini_api_key: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

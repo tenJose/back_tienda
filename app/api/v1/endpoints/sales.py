@@ -25,6 +25,8 @@ class SaleRequest(BaseModel):
     metodo_pago_id: UUID | None = None
     pago_recibido: Decimal = Field(ge=0)
     sucursal_id: UUID | None = None
+    cliente_id: UUID | None = None
+    idempotency_key: str = Field(min_length=1)
 
 
 def _payment_method_name(db: Session, metodo_pago_id: UUID | None) -> str:
@@ -83,22 +85,38 @@ def list_sales(db: Session = Depends(get_db)):
 
 @router.post("", dependencies=[CanSell])
 def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
+    existing = db.execute(
+        text("SELECT id, folio FROM ventas WHERE idempotency_key = :key"),
+        {"key": payload.idempotency_key}
+    ).mappings().one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="La venta ya fue procesada.")
+
+    es_credito = False
+    if payload.metodo_pago_id:
+        mp = db.execute(
+            text("SELECT es_credito FROM metodos_pago WHERE id = :id"),
+            {"id": str(payload.metodo_pago_id)}
+        ).mappings().one_or_none()
+        if mp and mp["es_credito"]:
+            es_credito = True
+
     product_ids = [str(item.producto_id) for item in payload.items]
     products = db.execute(
         text(
             """
             SELECT p.id, p.nombre, p.precio_venta, p.costo, p.es_granel,
-                   COALESCE(i.existencia, 0) AS existencia, i.id AS inventario_id
+                   COALESCE((SELECT SUM(existencia) FROM inventarios WHERE producto_id = p.id), 0) AS existencia,
+                   (SELECT id FROM inventarios WHERE producto_id = p.id LIMIT 1) AS inventario_id
             FROM productos p
-            LEFT JOIN inventarios i ON i.producto_id = p.id
-              AND ((:sucursal_id IS NULL AND i.sucursal_id IS NULL) OR i.sucursal_id = CAST(:sucursal_id AS uuid))
             WHERE p.id = ANY(CAST(:ids AS uuid[])) AND p.activo = true
             """
         ),
-        {"ids": product_ids, "sucursal_id": str(payload.sucursal_id) if payload.sucursal_id else None},
+        {"ids": product_ids},
     ).mappings().all()
     by_id = {str(row["id"]): row for row in products}
     if len(by_id) != len(product_ids):
+        print(f"ERROR 400: Hay productos inexistentes. by_id: {list(by_id.keys())}, product_ids: {product_ids}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Hay productos inexistentes o inactivos")
 
     subtotal = Decimal("0")
@@ -106,17 +124,45 @@ def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict 
     for item in payload.items:
         product = by_id[str(item.producto_id)]
         if item.cantidad != item.cantidad.to_integral_value() and not product["es_granel"]:
+            print(f"ERROR 400: {product['nombre']} no permite cantidad decimal. cantidad={item.cantidad}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{product['nombre']} no permite cantidad decimal")
         if Decimal(product["existencia"]) < item.cantidad:
+            print(f"ERROR 400: Stock insuficiente para {product['nombre']}. existencia={product['existencia']}, cantidad={item.cantidad}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stock insuficiente para {product['nombre']}")
         line_total = Decimal(product["precio_venta"]) * item.cantidad
         subtotal += line_total
         detail_rows.append((item, product, line_total))
 
+    if es_credito:
+        if not payload.cliente_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona un cliente para venta a crédito.")
+        cliente = db.execute(
+            text("SELECT id, activo, permite_credito, limite_credito FROM clientes WHERE id = :id"),
+            {"id": str(payload.cliente_id)}
+        ).mappings().one_or_none()
+        if not cliente:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente seleccionado no existe.")
+        if not cliente["activo"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente no está activo.")
+        if not cliente["permite_credito"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente no tiene crédito habilitado.")
+        
+        deuda = db.execute(
+            text("SELECT COALESCE(SUM(saldo_pendiente), 0) as deuda FROM creditos_cliente WHERE cliente_id = :id AND estado != 'pagado'"),
+            {"id": str(payload.cliente_id)}
+        ).mappings().one()
+        deuda_actual = Decimal(deuda["deuda"])
+        limite = Decimal(cliente["limite_credito"] or "0")
+        
+        if (deuda_actual + subtotal) > limite:
+            if user.get("rol") not in ["administrador", "dueño", "dueno"]:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente excede su límite de crédito.")
+
     pago_recibido = payload.pago_recibido
     cambio = pago_recibido - subtotal
     if payload.metodo_pago_id is None:
         if pago_recibido < subtotal:
+            print(f"ERROR 400: Pago recibido insuficiente. pago_recibido={pago_recibido}, subtotal={subtotal}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pago recibido insuficiente")
     else:
         pago_recibido = subtotal
@@ -127,8 +173,8 @@ def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict 
     venta_id = db.execute(
         text(
             """
-            INSERT INTO ventas (folio, usuario_id, sucursal_id, subtotal, total, metodo_pago_id, pago_recibido, cambio)
-            VALUES (:folio, :usuario_id, :sucursal_id, :subtotal, :total, :metodo_pago_id, :pago_recibido, :cambio)
+            INSERT INTO ventas (folio, usuario_id, sucursal_id, subtotal, total, metodo_pago_id, pago_recibido, cambio, cliente_id, idempotency_key)
+            VALUES (:folio, :usuario_id, :sucursal_id, :subtotal, :total, :metodo_pago_id, :pago_recibido, :cambio, :cliente_id, :idempotency_key)
             RETURNING id, created_at
             """
         ),
@@ -141,8 +187,28 @@ def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict 
             "metodo_pago_id": str(payload.metodo_pago_id) if payload.metodo_pago_id else None,
             "pago_recibido": pago_recibido,
             "cambio": cambio,
+            "cliente_id": str(payload.cliente_id) if payload.cliente_id else None,
+            "idempotency_key": payload.idempotency_key,
         },
     ).mappings().one()
+
+    if es_credito:
+        folio_cred = _next_folio(db, "credito", "CRD")
+        db.execute(
+            text(
+                """
+                INSERT INTO creditos_cliente (cliente_id, venta_id, monto_total, saldo_pendiente, estado, fecha_credito, folio)
+                VALUES (:cliente_id, :venta_id, :monto_total, :saldo_pendiente, 'pendiente', now(), :folio)
+                """
+            ),
+            {
+                "cliente_id": str(payload.cliente_id),
+                "venta_id": str(venta_id["id"]),
+                "monto_total": subtotal,
+                "saldo_pendiente": subtotal,
+                "folio": folio_cred,
+            }
+        )
 
     for item, product, line_total in detail_rows:
         db.execute(
@@ -167,11 +233,10 @@ def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict 
             text(
                 """
                 UPDATE inventarios SET existencia = :stock_nuevo, updated_at = now()
-                WHERE producto_id = :producto_id
-                  AND ((:sucursal_id IS NULL AND sucursal_id IS NULL) OR sucursal_id = CAST(:sucursal_id AS uuid))
+                WHERE id = :inventario_id
                 """
             ),
-            {"producto_id": str(item.producto_id), "sucursal_id": str(payload.sucursal_id) if payload.sucursal_id else None, "stock_nuevo": stock_nuevo},
+            {"inventario_id": str(product["inventario_id"]) if product["inventario_id"] else None, "stock_nuevo": stock_nuevo},
         )
         db.execute(
             text(
@@ -207,10 +272,25 @@ def create_sale(payload: SaleRequest, db: Session = Depends(get_db), user: dict 
         "metodo_pago": _payment_method_name(db, payload.metodo_pago_id),
         "mensaje": config["mensaje_ticket"] if config else "Gracias por su compra",
     }
+    if es_credito and payload.cliente_id:
+        c_nombre = db.execute(text("SELECT nombre FROM clientes WHERE id = :id"), {"id": str(payload.cliente_id)}).scalar_one_or_none()
+        ticket["cliente"] = c_nombre
     db.execute(
         text("INSERT INTO tickets (venta_id, folio_ticket, contenido) VALUES (:venta_id, :folio_ticket, :contenido)"),
         {"venta_id": str(venta_id["id"]), "folio_ticket": ticket_folio, "contenido": str(ticket)},
     )
+    
+    # Audit log
+    db.execute(
+        text(
+            """
+            INSERT INTO auditoria (usuario_id, accion, tabla_afectada, registro_id, datos_nuevos, descripcion)
+            VALUES (:uid, 'VENTA_CREADA', 'ventas', :vid, CAST(:datos AS jsonb), 'Venta registrada desde POS')
+            """
+        ),
+        {"uid": user.get("id"), "vid": str(venta_id["id"]), "datos": f'{{"folio": "{folio}", "es_credito": {str(es_credito).lower()}}}'}
+    )
+
     db.commit()
     return {"id": venta_id["id"], "folio": folio, "ticket": ticket}
 
@@ -230,18 +310,32 @@ class CashCloseRequest(BaseModel):
 def get_active_cash_cut(db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     row = db.execute(
         text(
-            "SELECT * FROM cortes_caja WHERE usuario_id = :usuario_id AND estado = 'abierta' ORDER BY created_at DESC LIMIT 1"
+            "SELECT id, caja_id, usuario_id, sucursal_id, monto_inicial, total_ventas, total_efectivo, total_tarjeta, total_transferencia, monto_final_sistema, monto_final_contado, diferencia, estado, fecha_apertura, fecha_cierre, observaciones FROM cortes_caja WHERE usuario_id = :usuario_id AND estado = 'abierta' ORDER BY fecha_apertura DESC LIMIT 1"
         ),
         {"usuario_id": user.get("id")},
     ).mappings().one_or_none()
-    return dict(row) if row else None
+    
+    if row:
+        totals = db.execute(
+            text(
+                "SELECT COALESCE(SUM(total),0) AS current_ventas, COALESCE(SUM(CASE WHEN metodo_pago_id IS NULL THEN total ELSE 0 END),0) AS current_efectivo FROM ventas WHERE usuario_id = :usuario_id AND created_at >= :since AND estado = 'completada'"
+            ),
+            {"usuario_id": user.get("id"), "since": row["fecha_apertura"]},
+        ).mappings().one()
+        
+        res = dict(row)
+        res["ventas_esperadas"] = totals["current_ventas"]
+        res["efectivo_esperado"] = float(row["monto_inicial"] or 0) + float(totals["current_efectivo"])
+        return res
+        
+    return None
 
 
 @router.post("/cortes-caja/apertura", dependencies=[CanSell])
 def open_cash_cut(payload: CashOpenRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     res = db.execute(
         text(
-            "INSERT INTO cortes_caja (usuario_id, sucursal_id, monto_inicial, estado) VALUES (:usuario_id, :sucursal_id, :monto_inicial, 'abierta') RETURNING id, created_at"
+            "INSERT INTO cortes_caja (usuario_id, sucursal_id, monto_inicial, estado) VALUES (:usuario_id, :sucursal_id, :monto_inicial, 'abierta') RETURNING id, fecha_apertura AS created_at"
         ),
         {"usuario_id": user.get("id"), "sucursal_id": str(payload.sucursal_id) if payload.sucursal_id else None, "monto_inicial": payload.monto_inicial},
     ).mappings().one()
@@ -252,7 +346,7 @@ def open_cash_cut(payload: CashOpenRequest, db: Session = Depends(get_db), user:
 @router.post("/cortes-caja/cierre", dependencies=[CanSell])
 def close_cash_cut(payload: CashCloseRequest, db: Session = Depends(get_db), user: dict = Depends(get_current_user)):
     corte = db.execute(
-        text("SELECT id, created_at FROM cortes_caja WHERE usuario_id = :usuario_id AND estado = 'abierta' ORDER BY created_at DESC LIMIT 1"),
+        text("SELECT id, fecha_apertura AS created_at FROM cortes_caja WHERE usuario_id = :usuario_id AND estado = 'abierta' ORDER BY fecha_apertura DESC LIMIT 1"),
         {"usuario_id": user.get("id")},
     ).mappings().one_or_none()
     if not corte:
@@ -266,7 +360,7 @@ def close_cash_cut(payload: CashCloseRequest, db: Session = Depends(get_db), use
     ).mappings().one()
 
     db.execute(
-        text("UPDATE cortes_caja SET monto_cierre = :monto_cierre, estado = 'cerrada', closed_at = now() WHERE id = :id"),
+        text("UPDATE cortes_caja SET monto_final_contado = :monto_cierre, estado = 'cerrada', fecha_cierre = now() WHERE id = :id"),
         {"monto_cierre": payload.efectivo_contado, "id": str(corte["id"])},
     )
     db.commit()
@@ -355,7 +449,7 @@ def cancel_sale(sale_id: UUID, db: Session = Depends(get_db), user: dict = Depen
             text(
                 """
                 UPDATE inventarios SET existencia = COALESCE(existencia, 0) + :cantidad, updated_at = now()
-                WHERE producto_id = :producto_id
+                WHERE id = (SELECT id FROM inventarios WHERE producto_id = :producto_id LIMIT 1)
                 """
             ),
             {"producto_id": producto_id, "cantidad": cantidad},

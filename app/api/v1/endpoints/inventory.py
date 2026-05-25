@@ -194,7 +194,7 @@ def create_entry(payload: PurchaseEntryRequest, db: Session = Depends(get_db), u
                    COALESCE(i.existencia, 0) AS existencia, i.id AS inventario_id
             FROM productos p
             LEFT JOIN inventarios i ON i.producto_id = p.id
-              AND ((:sucursal_id IS NULL AND i.sucursal_id IS NULL) OR i.sucursal_id = CAST(:sucursal_id AS uuid))
+              AND ((CAST(:sucursal_id AS uuid) IS NULL AND i.sucursal_id IS NULL) OR i.sucursal_id = CAST(:sucursal_id AS uuid))
             WHERE p.id = ANY(CAST(:ids AS uuid[])) AND p.activo = true
             """
         ),
@@ -283,7 +283,7 @@ def create_entry(payload: PurchaseEntryRequest, db: Session = Depends(get_db), u
                     """
                     UPDATE inventarios SET existencia = :stock_nuevo, updated_at = now()
                     WHERE producto_id = :producto_id
-                      AND ((:sucursal_id IS NULL AND sucursal_id IS NULL) OR sucursal_id = CAST(:sucursal_id AS uuid))
+                      AND ((CAST(:sucursal_id AS uuid) IS NULL AND sucursal_id IS NULL) OR sucursal_id = CAST(:sucursal_id AS uuid))
                     """
                 ),
                 {"producto_id": str(item.producto_id), "sucursal_id": str(payload.sucursal_id) if payload.sucursal_id else None, "stock_nuevo": stock_nuevo},
