@@ -21,7 +21,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://localhost", "http://127.0.0.1"],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|capacitor://localhost|ionic://localhost)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
